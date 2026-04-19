@@ -47,10 +47,9 @@ def _write_cookies_file() -> str | None:
         return None
 
 
-def _tiktok_oembed(url: str) -> dict:
-    """Fallback: fetch TikTok metadata via oEmbed (no auth needed)."""
-    api = f"https://www.tiktok.com/oembed?url={urllib.request.quote(url, safe='')}"
-    with urllib.request.urlopen(api, timeout=10) as resp:
+def _oembed_fallback(url: str, platform: str, api_url: str) -> dict:
+    req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
         data = json.loads(resp.read())
     return {
         "title": data.get("title", ""),
@@ -60,7 +59,7 @@ def _tiktok_oembed(url: str) -> dict:
         "tags": [],
         "webpage_url": url,
         "original_url": url,
-        "extractor_key": "TikTok",
+        "extractor_key": platform,
     }
 
 
@@ -85,17 +84,41 @@ def extract_metadata(url: str) -> dict:
         if result.returncode == 0:
             return json.loads(result.stdout)
 
-    # TikTok-specific fallback via oEmbed
     if "tiktok.com" in url:
         try:
-            return _tiktok_oembed(url)
+            return _oembed_fallback(url, "TikTok", f"https://www.tiktok.com/oembed?url={urllib.request.quote(url, safe='')}")
         except Exception as e:
-            raise RuntimeError(f"yt-dlp failed: {result.stderr.strip()} | oEmbed fallback failed: {e}")
+            raise RuntimeError(f"yt-dlp failed: {result.stderr.strip()} | TikTok oEmbed failed: {e}")
+
+    if "instagram.com" in url:
+        # Instagram blocks all scraping — return minimal stub so we at least save the link
+        return {
+            "title": "Instagram Post",
+            "uploader": "",
+            "channel": "",
+            "description": "",
+            "tags": [],
+            "webpage_url": url,
+            "original_url": url,
+            "extractor_key": "Instagram",
+            "_stub": True,
+        }
 
     raise RuntimeError(f"yt-dlp failed: {result.stderr.strip()}")
 
 
+def _stub_ai(url: str) -> dict:
+    return {
+        "summary": f"קישור Instagram — תוכן לא זמין לעיבוד אוטומטי.\n\n{url}",
+        "category": "אחר",
+        "clean_title": "Instagram Post",
+        "key_tags": ["instagram", "social"],
+    }
+
+
 def summarize_with_claude(meta: dict) -> dict:
+    if meta.get("_stub"):
+        return _stub_ai(meta["webpage_url"])
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     title = meta.get("title", "")
