@@ -8,11 +8,14 @@ Usage:
 Requires .env with ANTHROPIC_API_KEY and VAULT_TARGET_DIR.
 """
 
+import base64
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
+import urllib.request
 from datetime import date
 from pathlib import Path
 
@@ -29,20 +32,67 @@ CATEGORIES = ["אוכל ובישול", "טכנולוגיה", "כושר וברי�
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 
+def _write_cookies_file() -> str | None:
+    """Write YTDLP_COOKIES env var (base64 Netscape format) to a temp file. Returns path or None."""
+    raw = os.getenv("YTDLP_COOKIES")
+    if not raw:
+        return None
+    try:
+        decoded = base64.b64decode(raw).decode("utf-8")
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+        f.write(decoded)
+        f.close()
+        return f.name
+    except Exception:
+        return None
+
+
+def _tiktok_oembed(url: str) -> dict:
+    """Fallback: fetch TikTok metadata via oEmbed (no auth needed)."""
+    api = f"https://www.tiktok.com/oembed?url={urllib.request.quote(url, safe='')}"
+    with urllib.request.urlopen(api, timeout=10) as resp:
+        data = json.loads(resp.read())
+    return {
+        "title": data.get("title", ""),
+        "uploader": data.get("author_name", ""),
+        "channel": data.get("author_name", ""),
+        "description": data.get("title", ""),
+        "tags": [],
+        "webpage_url": url,
+        "original_url": url,
+        "extractor_key": "TikTok",
+    }
+
+
 def extract_metadata(url: str) -> dict:
-    # try with Safari cookies first (helps with TikTok/Instagram login walls)
-    for cookies_arg in [["--cookies-from-browser", "safari"], []]:
+    cookies_path = _write_cookies_file()
+
+    attempts = []
+    if cookies_path:
+        attempts.append(["--cookies", cookies_path, "--impersonate", "chrome"])
+    attempts.append(["--cookies-from-browser", "safari"])
+    attempts.append(["--impersonate", "chrome"])
+    attempts.append([])
+
+    result = None
+    for extra_args in attempts:
         result = subprocess.run(
-            ["yt-dlp", "-j", "--skip-download", "--no-playlist"] + cookies_arg + [url],
+            ["yt-dlp", "-j", "--skip-download", "--no-playlist"] + extra_args + [url],
             capture_output=True,
             text=True,
             timeout=30,
         )
         if result.returncode == 0:
-            break
-    if result.returncode != 0:
-        raise RuntimeError(f"yt-dlp failed: {result.stderr.strip()}")
-    return json.loads(result.stdout)
+            return json.loads(result.stdout)
+
+    # TikTok-specific fallback via oEmbed
+    if "tiktok.com" in url:
+        try:
+            return _tiktok_oembed(url)
+        except Exception as e:
+            raise RuntimeError(f"yt-dlp failed: {result.stderr.strip()} | oEmbed fallback failed: {e}")
+
+    raise RuntimeError(f"yt-dlp failed: {result.stderr.strip()}")
 
 
 def summarize_with_claude(meta: dict) -> dict:
