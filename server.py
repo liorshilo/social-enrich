@@ -3,6 +3,7 @@
 FastAPI server — Social → Obsidian via GitHub API (Phase 2 / Railway).
 
 POST /enrich  {"url": "https://..."}
+GET  /enrich?url=https://...   (for iOS Shortcuts)
 GET  /        health check
 """
 
@@ -69,13 +70,12 @@ def health():
     return {"status": "ok", "repo": GITHUB_REPO, "path": GITHUB_VAULT_PATH}
 
 
-@app.post("/enrich", response_model=EnrichResponse)
-def enrich(req: EnrichRequest):
-    if not req.url.startswith("http"):
+def _process_url(url: str) -> EnrichResponse:
+    if not url.startswith("http"):
         raise HTTPException(status_code=400, detail="Invalid URL")
 
     try:
-        meta = extract_metadata(req.url)
+        meta = extract_metadata(url)
     except RuntimeError as e:
         raise HTTPException(status_code=422, detail=f"yt-dlp failed: {e}")
 
@@ -97,6 +97,17 @@ def enrich(req: EnrichRequest):
         github_path=github_path,
         message=f"✓ Saved: {ai['clean_title']}",
     )
+
+
+@app.get("/enrich", response_model=EnrichResponse)
+def enrich_get(url: str):
+    """GET /enrich?url=https://... — simple endpoint for iOS Shortcuts."""
+    return _process_url(url)
+
+
+@app.post("/enrich", response_model=EnrichResponse)
+def enrich(req: EnrichRequest):
+    return _process_url(req.url)
 
 
 if __name__ == "__main__":
