@@ -10,10 +10,11 @@ GET  /        health check
 import base64
 import os
 from datetime import date
+from urllib.parse import unquote
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from github import Github, GithubException
 from pydantic import BaseModel
 
@@ -100,8 +101,17 @@ def _process_url(url: str) -> EnrichResponse:
 
 
 @app.get("/enrich", response_model=EnrichResponse)
-def enrich_get(url: str):
-    """GET /enrich?url=https://... — simple endpoint for iOS Shortcuts."""
+def enrich_get(request: Request):
+    """GET /enrich?url=https://... — simple endpoint for iOS Shortcuts.
+
+    Reads the raw query string so that URLs containing '&' (e.g. YouTube
+    watch?v=xxx&list=yyy) are captured in full rather than split into
+    separate query parameters.
+    """
+    raw_query = str(request.url.query)
+    if not raw_query.startswith("url="):
+        raise HTTPException(status_code=400, detail="Missing 'url' query parameter")
+    url = unquote(raw_query[4:])
     return _process_url(url)
 
 
